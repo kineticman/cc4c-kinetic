@@ -1,0 +1,73 @@
+{
+  "server": {
+    "host": "bradmini.lan",
+    "port": 5589,
+    "logLevel": "info"
+  },
+  "capture": {
+    "videoBitrate": 8000000,
+    "audioBitrate": 256000,
+    "frameRate": 60,
+    "width": 1920,
+    "height": 1080,
+    "minimizeWindow": false
+  },
+  "services": {
+    "appletv-sports": {
+      "enabled": true,
+      "sessionReuse": true,
+      "timeout": 30000,
+      "priority": 1
+    },
+    "peacock-enhanced": {
+      "enabled": true,
+      "sessionReuse": true,
+      "autoQuality": "1080p",
+      "timeout": 25000,
+      "priority": 2
+    },
+    "espn-plus": {
+      "enabled": true,
+      "sessionReuse": true,
+      "timeout": 25000,
+      "priority": 3
+    },
+    "weatherscan": {
+      "enabled": true,
+      "sessionReuse": false,
+      "timeout": 15000,
+      "priority": 10
+    },
+    "test-hls": {
+      "enabled": true,
+      "sessionReuse": false,
+      "timeout": 10000,
+      "priority": 99
+    }
+  },
+  "features": {
+    "drmDetection": true,
+    "sessionPooling": true,
+    "streamInterception": true,
+    "directProxy": true,
+    "metrics": true,
+    "healthCheck": true
+  },
+  "performance": {
+    "hardwareAcceleration": true,
+    "gpuEncoding": true,
+    "sessionTimeout": 1800000,
+    "maxConcurrentStreams": 5
+  },
+  "integration": {
+    "fruitDeepLinks": {
+      "enabled": true,
+      "baseUrl": "http://bradmini.lan:5589"
+    }
+  },
+  "logging": {
+    "console": true,
+    "file": false,
+    "directory": "./logs"
+  }
+}

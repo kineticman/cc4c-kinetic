@@ -1,0 +1,28 @@
+{
+  "name": "cc4c-kinetic",
+  "version": "1.0.0",
+  "description": "Kinetic enhancements for Chrome Capture for Channels",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [
+    "chrome-capture",
+    "channels-dvr",
+    "streaming",
+    "automation",
+    "sports"
+  ],
+  "author": "Brad",
+  "license": "MIT",
+  "dependencies": {},
+  "peerDependencies": {
+    "puppeteer-core": ">=21.0.0",
+    "puppeteer-stream": ">=3.0.0"
+  },
+  "engines": {
+    "node": ">=18.0.0",
+    "bun": ">=1.0.0"
+  },
+  "devDependencies": {}
+}

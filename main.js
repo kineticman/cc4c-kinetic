@@ -10,6 +10,18 @@ require('console-stamp')(console, {
   format: ':date(yyyy/mm/dd HH:MM:ss.l)',
 })
 
+// ============= KINETIC INTEGRATION START =============
+// Load Kinetic enhancements
+let kinetic = null;
+try {
+  kinetic = require('./kinetic');
+  console.log('[Kinetic] Loaded with services:', Object.keys(kinetic.services.getAll()));
+} catch (error) {
+  console.log('[Kinetic] Not loaded (module not found or error):', error.message);
+  console.log('[Kinetic] Running in standard mode without enhancements');
+}
+// ============= KINETIC INTEGRATION END =============
+
 // --- suppress harmless first-run extension error, but still restart ---
 const EXT_ID = 'jjndjgheafjngoipoacpjgeicjeomjli';
 
@@ -133,7 +145,7 @@ const getCurrentBrowser = async () => {
       {
         executablePath: getExecutablePath(),
         pipe: true, // more robust to keep browser connection from disconnecting
-        headless: false,
+        headless: true,
         defaultViewport: null, // no viewport emulation
         userDataDir: path.join(dataDir, 'chromedata'),
         args: [
@@ -248,9 +260,10 @@ async function main() {
   app.get('/', (req, res) => {
     res.send(
       `<html>
-  <title>Chrome Capture for Channels</title>
-  <h2>Chrome Capture for Channels</h2>
+  <title>Chrome Capture for Channels ${kinetic ? '+ Kinetic' : ''}</title>
+  <h2>Chrome Capture for Channels ${kinetic ? '+ Kinetic Enhancements' : ''}</h2>
   <p>Usage: <code>/stream?url=URL</code> or <code>/stream/&lt;name></code></p>
+  ${kinetic ? '<p><strong>Kinetic Status:</strong> ✓ Active | <a href="/kinetic/stats">View Stats</a></p>' : ''}
   <pre>
   #EXTM3U
 
@@ -310,6 +323,45 @@ async function main() {
     res.send('true')
   })
 
+  // ============= KINETIC STATS ENDPOINT =============
+  if (kinetic) {
+    app.get('/kinetic/stats', (req, res) => {
+      res.json(kinetic.getStats());
+    });
+
+    app.get('/kinetic/health', (req, res) => {
+      res.json({
+        status: 'ok',
+        kinetic: {
+          enabled: true,
+          services: Object.keys(kinetic.config.services).filter(
+            s => kinetic.config.services[s].enabled
+          ),
+          features: kinetic.config.features,
+        }
+      });
+    });
+
+    app.post('/kinetic/sessions/clear', async (req, res) => {
+      await kinetic.cleanup();
+      res.json({success: true, message: 'Session pool cleared'});
+    });
+
+    // Direct stream proxy endpoint - using query parameter instead of path wildcard
+    app.get('/kinetic/proxy/:proxyId', async (req, res) => {
+      const { proxyId } = req.params;
+      const segmentUrl = req.query.url;
+      
+      if (!segmentUrl) {
+        return res.status(400).send('Missing url query parameter');
+      }
+      
+      const decodedUrl = decodeURIComponent(segmentUrl);
+      await kinetic.streamProxy.proxySegment(proxyId, decodedUrl, res);
+    });
+  }
+  // ============= KINETIC ENDPOINTS END =============
+
   app.get('/stream{/:name}', async (req, res) => {
     var u = req.query.url
     let name = req.params.name
@@ -342,42 +394,77 @@ async function main() {
         weatherscan: 'https://v2.weatherscan.net/',
         windy: 'https://windy.com',
         gpu: 'chrome://gpu',
+        
+        // ============= KINETIC STREAM SHORTCUTS =============
+        'appletv-mls': 'https://tv.apple.com/us/sport/mls/tvs.sbd.7011',
+        'appletv-mlb': 'https://tv.apple.com/us/sport/mlb/tvs.sbd.7000',
+        'appletv-nba': 'https://tv.apple.com/us/sport/nba/tvs.sbd.7001',
+        'appletv-nhl': 'https://tv.apple.com/us/sport/nhl/tvs.sbd.7002',
+        'peacock-sports': 'https://www.peacocktv.com/watch/sports',
+        'peacock-epl': 'https://www.peacocktv.com/sports/premier-league',
+        'espn-plus': 'https://www.espn.com/watch/espnplus',
+        'test-hls': 'http://localhost:8889/',
+        // ============= KINETIC SHORTCUTS END =============
       }[name]
     }
+
+    // ============= KINETIC HANDLER START =============
+    // Check if Kinetic should handle this URL
+    if (kinetic && u && kinetic.shouldHandle(u)) {
+      console.log('[Main] Using Kinetic handler for:', u);
+      try {
+        await kinetic.handleStream(
+          u,
+          await getCurrentBrowser(),
+          setupPage,
+          getStream,
+          encodingParams,
+          req,
+          res
+        );
+        return; // Important: return after Kinetic handles it
+      } catch (error) {
+        console.error('[Main] Kinetic handler failed, falling back to default:', error.message);
+        // Fall through to default handler
+      }
+    }
+    // ============= KINETIC HANDLER END =============
 
     await handleStreamRequest(req, res, u)
   })
 
-  async function handleStreamRequest(req, res, u) {
-    async function setupPage(browser) {
-      // Create a new page
-      var newPage = await browser.newPage()
+  // ============= SETUP PAGE FUNCTION (MOVED OUTSIDE handleStreamRequest) =============
+  async function setupPage(browser) {
+    // Create a new page
+    var newPage = await browser.newPage()
 
-      // Stabilize it
-      await newPage.setBypassCSP(true) // Sometimes needed for puppeteer-stream
-      await delay(1000) // Wait for the page to be stable
+    // Stabilize it
+    await newPage.setBypassCSP(true) // Sometimes needed for puppeteer-stream
+    await delay(1000) // Wait for the page to be stable
 
-      // Now try to enable stream capabilities
-      if (newPage.getStream) {
-        console.log('Stream capabilities already present')
-      } else {
-        console.log('Need to initialize stream capabilities')
-        // Here you might need to reinitialize puppeteer-stream
-      }
-
-      // Show browser error messages, but for Sling filter out Sling Mixed Content warnings
-      newPage.on('console', msg => {
-        const text = msg.text()
-        // Filter out messages containing "Mixed Content"
-        if (!text.includes('Mixed Content')) {
-          // UNCOMMENT THIS LINE TO SEE ALL BROWSER MESSAGES
-          //console.log(text);
-        }
-      })
-
-      return newPage
+    // Now try to enable stream capabilities
+    if (newPage.getStream) {
+      console.log('Stream capabilities already present')
+    } else {
+      console.log('Need to initialize stream capabilities')
+      // Here you might need to reinitialize puppeteer-stream
     }
 
+    // Show browser error messages, but for Sling filter out Sling Mixed Content warnings
+    newPage.on('console', msg => {
+      const text = msg.text()
+      // Filter out messages containing "Mixed Content"
+      if (!text.includes('Mixed Content')) {
+        // UNCOMMENT THIS LINE TO SEE ALL BROWSER MESSAGES
+        //console.log(text);
+      }
+    })
+
+    return newPage
+  }
+  // ============= SETUP PAGE FUNCTION END =============
+
+  async function handleStreamRequest(req, res, u) {
     var browser, page
     try {
       browser = await getCurrentBrowser()
@@ -567,7 +654,7 @@ async function main() {
           }
         })
       } catch (e) {
-        console.log('Error for watch.spectrum.com:', e)
+        console.log('Error for watch.spectrum.net:', e)
       }
     }
 
@@ -678,7 +765,28 @@ async function main() {
 
   const server = app.listen(argv.port, () => {
     console.log('Chrome Capture server listening on port', argv.port)
+    if (kinetic) {
+      console.log('[Kinetic] Ready with enhanced services')
+    }
   })
+
+  // ============= KINETIC CLEANUP ON SHUTDOWN =============
+  process.on('SIGTERM', async () => {
+    console.log('Shutting down...');
+    if (kinetic) {
+      await kinetic.cleanup();
+    }
+    process.exit(0);
+  });
+
+  process.on('SIGINT', async () => {
+    console.log('Shutting down...');
+    if (kinetic) {
+      await kinetic.cleanup();
+    }
+    process.exit(0);
+  });
+  // ============= KINETIC CLEANUP END =============
 }
 
 main().catch(err => {
