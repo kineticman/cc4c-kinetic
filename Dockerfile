@@ -1,4 +1,4 @@
-#docker buildx build --platform linux/amd64 -f Dockerfile -t bnhf/cc4c:latest -t bnhf/cc4c:2025.04.12 . --push --no-cache
+#docker buildx build --platform linux/amd64 -f Dockerfile -t bnhf/cc4c:latest -t bnhf/cc4c:2025.12.30-gpu . --push --no-cache
 FROM node:lts-bookworm-slim AS base
 
 ARG DEBIAN_FRONTEND=noninteractive
@@ -12,7 +12,7 @@ RUN rm -f /etc/apt/sources.list.d/debian.sources \
   "deb http://deb.debian.org/debian bookworm-updates main contrib non-free non-free-firmware" \
   > /etc/apt/sources.list
 
-# Core system and Chrome runtime dependencies
+# Core system and Chrome runtime dependencies + GPU libraries
 RUN apt-get update && apt-get install -y --no-install-recommends \
     gconf-service libasound2 libatk1.0-0 libc6 libcairo2 libcups2 \
     libdbus-1-3 libexpat1 libfontconfig1 libgcc1 libgconf-2-4 libgdk-pixbuf2.0-0 \
@@ -22,8 +22,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libxtst6 ca-certificates fonts-liberation libappindicator1 libnss3 lsb-release \
     xdg-utils x11vnc x11-xkb-utils xfonts-100dpi xfonts-75dpi xfonts-scalable \
     x11-apps xvfb xserver-xorg-core x11-xserver-utils xauth gnupg \
-    wget libva2 libva-drm2 libva-x11-2 intel-media-va-driver-non-free vainfo \
-    procps
+    wget procps \
+    libva2 libva-drm2 libva-x11-2 intel-media-va-driver-non-free vainfo \
+    i965-va-driver mesa-va-drivers \
+    vdpau-driver-all libvulkan1 mesa-vulkan-drivers
 
 # Add Google Chrome (stable)
 RUN wget -q -O - https://dl-ssl.google.com/linux/linux_signing_key.pub | apt-key add - && \
@@ -41,6 +43,7 @@ ENV DOCKER=true
 # Create app directory and copy files
 WORKDIR /home/chrome
 COPY main.js package.json bun.lock start.sh ./
+COPY kinetic/ ./kinetic/
 
 # Install Node dependencies
 ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true

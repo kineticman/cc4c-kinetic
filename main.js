@@ -20,6 +20,78 @@ try {
   console.log('[Kinetic] Not loaded (module not found or error):', error.message);
   console.log('[Kinetic] Running in standard mode without enhancements');
 }
+
+// GPU monitoring utilities
+const gpuMonitor = {
+  isNvidia: !!(process.env.NVIDIA_VISIBLE_DEVICES || process.env.CUDA_VISIBLE_DEVICES),
+  activeGpuSessions: 0,
+  maxGpuSessions: parseInt(process.env.MAX_GPU_SESSIONS) || 6,
+  
+  async getStats() {
+    if (!this.isNvidia) {
+      return {
+        available: false,
+        message: 'GPU monitoring only available for NVIDIA GPUs'
+      }
+    }
+    
+    try {
+      const output = child_process.execSync(
+        'nvidia-smi --query-gpu=name,utilization.gpu,memory.used,memory.total,temperature.gpu,utilization.encoder,utilization.decoder --format=csv,noheader,nounits',
+        { encoding: 'utf8', timeout: 5000 }
+      )
+      
+      const [model, util, memUsed, memTotal, temp, encUtil, decUtil] = output.split(',').map(s => s.trim())
+      
+      return {
+        available: true,
+        gpu: {
+          model,
+          utilization: parseFloat(util),
+          memory: {
+            used: parseFloat(memUsed),
+            total: parseFloat(memTotal),
+            percentage: (parseFloat(memUsed) / parseFloat(memTotal)) * 100
+          },
+          temperature: parseFloat(temp),
+          encoderUtilization: parseFloat(encUtil),
+          decoderUtilization: parseFloat(decUtil)
+        },
+        sessions: {
+          active: this.activeGpuSessions,
+          capacity: this.maxGpuSessions,
+          available: this.maxGpuSessions - this.activeGpuSessions,
+          percentage: (this.activeGpuSessions / this.maxGpuSessions) * 100
+        }
+      }
+    } catch (error) {
+      return {
+        available: false,
+        error: error.message
+      }
+    }
+  },
+  
+  acquireSession() {
+    if (this.activeGpuSessions >= this.maxGpuSessions) {
+      throw new Error(`GPU capacity reached (${this.maxGpuSessions} max sessions)`)
+    }
+    this.activeGpuSessions++
+    console.log(`[GPU] Session acquired (${this.activeGpuSessions}/${this.maxGpuSessions})`)
+  },
+  
+  releaseSession() {
+    if (this.activeGpuSessions > 0) {
+      this.activeGpuSessions--
+      console.log(`[GPU] Session released (${this.activeGpuSessions}/${this.maxGpuSessions})`)
+    }
+  }
+}
+
+// Export for Kinetic integration
+if (kinetic) {
+  kinetic.gpuMonitor = gpuMonitor
+}
 // ============= KINETIC INTEGRATION END =============
 
 // --- suppress harmless first-run extension error, but still restart ---
@@ -127,17 +199,42 @@ const getCurrentBrowser = async () => {
     currentBrowser = await launch(
       {
         launch: opts => {
-          if (process.env.DOCKER) {
-            opts.args = opts.args.concat([
+          // GPU acceleration flags
+          const gpuFlags = [
+            '--enable-gpu',
+            '--enable-gpu-rasterization',
+            '--enable-accelerated-video-decode',
+            '--enable-accelerated-video-encode',
+            '--ignore-gpu-blocklist',
+            '--enable-zero-copy',
+            '--enable-features=VaapiVideoDecoder,VaapiVideoEncoder,VaapiIgnoreDriverChecks',
+            '--disable-gpu-driver-bug-workarounds',
+            '--enable-native-gpu-memory-buffers',
+            '--enable-oop-rasterization',
+          ]
+
+          // Additional flags for Docker/Linux environments
+          if (process.env.DOCKER || process.platform === 'linux') {
+            gpuFlags.push(
               '--use-gl=angle',
               '--use-angle=gl-egl',
-              '--enable-features=VaapiVideoDecoder,VaapiVideoEncoder',
-              '--ignore-gpu-blocklist',
-              '--enable-zero-copy',
               '--enable-drdc',
               '--no-sandbox',
-            ])
+            )
           }
+
+          // NVIDIA GPU specific flags (detected via environment variable)
+          if (process.env.NVIDIA_VISIBLE_DEVICES || process.env.CUDA_VISIBLE_DEVICES) {
+            console.log('[GPU] NVIDIA GPU detected, enabling CUDA acceleration')
+            gpuFlags.push(
+              '--use-vulkan',
+            )
+          }
+
+          // Apply GPU flags
+          opts.args = opts.args.concat(gpuFlags)
+          
+          console.log('[GPU] Enabled with flags:', gpuFlags)
           console.log('Launching Browser, Opts', opts)
           return puppeteerLaunch(opts)
         },
@@ -329,6 +426,21 @@ async function main() {
       res.json(kinetic.getStats());
     });
 
+    app.get('/kinetic/gpu-stats', async (req, res) => {
+      try {
+        const stats = await gpuMonitor.getStats()
+        res.json({
+          timestamp: new Date().toISOString(),
+          ...stats
+        })
+      } catch (error) {
+        res.status(500).json({
+          error: 'Failed to retrieve GPU stats',
+          message: error.message
+        })
+      }
+    });
+
     app.get('/kinetic/health', (req, res) => {
       res.json({
         status: 'ok',
@@ -338,6 +450,13 @@ async function main() {
             s => kinetic.config.services[s].enabled
           ),
           features: kinetic.config.features,
+        },
+        gpu: {
+          monitoring: gpuMonitor.isNvidia,
+          sessions: {
+            active: gpuMonitor.activeGpuSessions,
+            capacity: gpuMonitor.maxGpuSessions
+          }
         }
       });
     });
